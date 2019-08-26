@@ -1,275 +1,1039 @@
 package vsphere
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"testing"
 
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/terraform"
-	"github.com/vmware/govmomi/find"
+	"github.com/terraform-providers/terraform-provider-vsphere/vsphere/internal/helper/folder"
+	"github.com/terraform-providers/terraform-provider-vsphere/vsphere/internal/helper/viapi"
 	"github.com/vmware/govmomi/object"
-	"golang.org/x/net/context"
 )
 
-// Basic top-level folder creation
-func TestAccVSphereFolder_basic(t *testing.T) {
-	var f folder
-	datacenter := os.Getenv("VSPHERE_DATACENTER")
-	testMethod := "basic"
-	resourceName := "vsphere_folder." + testMethod
-	path := "tf_test_basic"
+const testAccResourceVSphereFolderConfigExpectedName = "terraform-test-folder"
+const testAccResourceVSphereFolderConfigExpectedAltName = "terraform-renamed-folder"
+const testAccResourceVSphereFolderConfigExpectedParentName = "terraform-test-parent"
+const testAccResourceVSphereFolderConfigOOBName = "terraform-test-oob"
 
+func TestAccResourceVSphereFolder_vmFolder(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:     func() { testAccPreCheck(t) },
+		PreCheck: func() {
+			testAccPreCheck(t)
+		},
 		Providers:    testAccProviders,
-		CheckDestroy: testAccCheckVSphereFolderDestroy,
+		CheckDestroy: testAccResourceVSphereFolderExists(false),
 		Steps: []resource.TestStep{
-			resource.TestStep{
-				Config: fmt.Sprintf(
-					testAccCheckVSphereFolderConfig,
-					testMethod,
-					path,
-					datacenter,
+			{
+				Config: testAccResourceVSphereFolderConfigBasic(
+					testAccResourceVSphereFolderConfigExpectedName,
+					folder.VSphereFolderTypeVM,
 				),
 				Check: resource.ComposeTestCheckFunc(
-					testAccCheckVSphereFolderExists(resourceName, &f),
-					resource.TestCheckResourceAttr(
-						resourceName, "path", path),
-					resource.TestCheckResourceAttr(
-						resourceName, "existing_path", ""),
+					testAccResourceVSphereFolderExists(true),
+					testAccResourceVSphereFolderHasName(testAccResourceVSphereFolderConfigExpectedName),
+					testAccResourceVSphereFolderHasType(folder.VSphereFolderTypeVM),
 				),
 			},
 		},
 	})
 }
 
-func TestAccVSphereFolder_nested(t *testing.T) {
-
-	var f folder
-	datacenter := os.Getenv("VSPHERE_DATACENTER")
-	testMethod := "nested"
-	resourceName := "vsphere_folder." + testMethod
-	path := "tf_test_nested/tf_test_folder"
-
+func TestAccResourceVSphereFolder_datastoreFolder(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:     func() { testAccPreCheck(t) },
+		PreCheck: func() {
+			testAccPreCheck(t)
+		},
 		Providers:    testAccProviders,
-		CheckDestroy: testAccCheckVSphereFolderDestroy,
+		CheckDestroy: testAccResourceVSphereFolderExists(false),
 		Steps: []resource.TestStep{
-			resource.TestStep{
-				Config: fmt.Sprintf(
-					testAccCheckVSphereFolderConfig,
-					testMethod,
-					path,
-					datacenter,
+			{
+				Config: testAccResourceVSphereFolderConfigBasic(
+					testAccResourceVSphereFolderConfigExpectedName,
+					folder.VSphereFolderTypeDatastore,
 				),
 				Check: resource.ComposeTestCheckFunc(
-					testAccCheckVSphereFolderExists(resourceName, &f),
-					resource.TestCheckResourceAttr(
-						resourceName, "path", path),
-					resource.TestCheckResourceAttr(
-						resourceName, "existing_path", ""),
+					testAccResourceVSphereFolderExists(true),
+					testAccResourceVSphereFolderHasName(testAccResourceVSphereFolderConfigExpectedName),
+					testAccResourceVSphereFolderHasType(folder.VSphereFolderTypeDatastore),
 				),
 			},
 		},
 	})
 }
 
-func TestAccVSphereFolder_dontDeleteExisting(t *testing.T) {
+func TestAccResourceVSphereFolder_networkFolder(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() {
+			testAccPreCheck(t)
+		},
+		Providers:    testAccProviders,
+		CheckDestroy: testAccResourceVSphereFolderExists(false),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccResourceVSphereFolderConfigBasic(
+					testAccResourceVSphereFolderConfigExpectedName,
+					folder.VSphereFolderTypeNetwork,
+				),
+				Check: resource.ComposeTestCheckFunc(
+					testAccResourceVSphereFolderExists(true),
+					testAccResourceVSphereFolderHasName(testAccResourceVSphereFolderConfigExpectedName),
+					testAccResourceVSphereFolderHasType(folder.VSphereFolderTypeNetwork),
+				),
+			},
+		},
+	})
+}
 
-	var f folder
-	datacenter := os.Getenv("VSPHERE_DATACENTER")
-	testMethod := "dontDeleteExisting"
-	resourceName := "vsphere_folder." + testMethod
-	existingPath := "tf_test_dontDeleteExisting/tf_existing"
-	path := existingPath + "/tf_nested/tf_test"
+func TestAccResourceVSphereFolder_hostFolder(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() {
+			testAccPreCheck(t)
+		},
+		Providers:    testAccProviders,
+		CheckDestroy: testAccResourceVSphereFolderExists(false),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccResourceVSphereFolderConfigBasic(
+					testAccResourceVSphereFolderConfigExpectedName,
+					folder.VSphereFolderTypeHost,
+				),
+				Check: resource.ComposeTestCheckFunc(
+					testAccResourceVSphereFolderExists(true),
+					testAccResourceVSphereFolderHasName(testAccResourceVSphereFolderConfigExpectedName),
+					testAccResourceVSphereFolderHasType(folder.VSphereFolderTypeHost),
+				),
+			},
+		},
+	})
+}
+
+func TestAccResourceVSphereFolder_datacenterFolder(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() {
+			testAccPreCheck(t)
+		},
+		Providers:    testAccProviders,
+		CheckDestroy: testAccResourceVSphereFolderExists(false),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccResourceVSphereFolderConfigBasic(
+					testAccResourceVSphereFolderConfigExpectedName,
+					folder.VSphereFolderTypeDatacenter,
+				),
+				Check: resource.ComposeTestCheckFunc(
+					testAccResourceVSphereFolderExists(true),
+					testAccResourceVSphereFolderHasName(testAccResourceVSphereFolderConfigExpectedName),
+					testAccResourceVSphereFolderHasType(folder.VSphereFolderTypeDatacenter),
+				),
+			},
+		},
+	})
+}
+
+func TestAccResourceVSphereFolder_rename(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() {
+			testAccPreCheck(t)
+		},
+		Providers:    testAccProviders,
+		CheckDestroy: testAccResourceVSphereFolderExists(false),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccResourceVSphereFolderConfigBasic(
+					testAccResourceVSphereFolderConfigExpectedName,
+					folder.VSphereFolderTypeVM,
+				),
+				Check: resource.ComposeTestCheckFunc(
+					testAccResourceVSphereFolderExists(true),
+					testAccResourceVSphereFolderHasName(testAccResourceVSphereFolderConfigExpectedName),
+					testAccResourceVSphereFolderHasType(folder.VSphereFolderTypeVM),
+				),
+			},
+			{
+				Config: testAccResourceVSphereFolderConfigBasic(
+					testAccResourceVSphereFolderConfigExpectedAltName,
+					folder.VSphereFolderTypeVM,
+				),
+				Check: resource.ComposeTestCheckFunc(
+					testAccResourceVSphereFolderExists(true),
+					testAccResourceVSphereFolderHasName(testAccResourceVSphereFolderConfigExpectedAltName),
+					testAccResourceVSphereFolderHasType(folder.VSphereFolderTypeVM),
+				),
+			},
+		},
+	})
+}
+
+func TestAccResourceVSphereFolder_subfolder(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() {
+			testAccPreCheck(t)
+		},
+		Providers:    testAccProviders,
+		CheckDestroy: testAccResourceVSphereFolderExists(false),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccResourceVSphereFolderConfigSubFolder(
+					testAccResourceVSphereFolderConfigExpectedName,
+					folder.VSphereFolderTypeVM,
+				),
+				Check: resource.ComposeTestCheckFunc(
+					testAccResourceVSphereFolderExists(true),
+					testAccResourceVSphereFolderHasName(testAccResourceVSphereFolderConfigExpectedName),
+					testAccResourceVSphereFolderHasType(folder.VSphereFolderTypeVM),
+					testAccResourceVSphereFolderHasParent(false, testAccResourceVSphereFolderConfigExpectedParentName),
+				),
+			},
+		},
+	})
+}
+
+func TestAccResourceVSphereFolder_moveToSubfolder(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() {
+			testAccPreCheck(t)
+		},
+		Providers:    testAccProviders,
+		CheckDestroy: testAccResourceVSphereFolderExists(false),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccResourceVSphereFolderConfigBasic(
+					testAccResourceVSphereFolderConfigExpectedName,
+					folder.VSphereFolderTypeVM,
+				),
+				Check: resource.ComposeTestCheckFunc(
+					testAccResourceVSphereFolderExists(true),
+					testAccResourceVSphereFolderHasName(testAccResourceVSphereFolderConfigExpectedName),
+					testAccResourceVSphereFolderHasType(folder.VSphereFolderTypeVM),
+					testAccResourceVSphereFolderHasParent(true, "vm"),
+				),
+			},
+			{
+				Config: testAccResourceVSphereFolderConfigSubFolder(
+					testAccResourceVSphereFolderConfigExpectedName,
+					folder.VSphereFolderTypeVM,
+				),
+				Check: resource.ComposeTestCheckFunc(
+					testAccResourceVSphereFolderExists(true),
+					testAccResourceVSphereFolderHasName(testAccResourceVSphereFolderConfigExpectedName),
+					testAccResourceVSphereFolderHasType(folder.VSphereFolderTypeVM),
+					testAccResourceVSphereFolderHasParent(false, testAccResourceVSphereFolderConfigExpectedParentName),
+				),
+			},
+		},
+	})
+}
+
+func TestAccResourceVSphereFolder_tags(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() {
+			testAccPreCheck(t)
+		},
+		Providers:    testAccProviders,
+		CheckDestroy: testAccResourceVSphereFolderExists(false),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccResourceVSphereFolderConfigTag(),
+				Check: resource.ComposeTestCheckFunc(
+					testAccResourceVSphereFolderExists(true),
+					testAccResourceVSphereFolderHasName(testAccResourceVSphereFolderConfigExpectedName),
+					testAccResourceVSphereFolderHasType(folder.VSphereFolderTypeVM),
+					testAccResourceVSphereFolderCheckTags("terraform-test-tag"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccResourceVSphereFolder_modifyTags(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() {
+			testAccPreCheck(t)
+		},
+		Providers:    testAccProviders,
+		CheckDestroy: testAccResourceVSphereFolderExists(false),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccResourceVSphereFolderConfigTag(),
+				Check: resource.ComposeTestCheckFunc(
+					testAccResourceVSphereFolderExists(true),
+					testAccResourceVSphereFolderHasName(testAccResourceVSphereFolderConfigExpectedName),
+					testAccResourceVSphereFolderHasType(folder.VSphereFolderTypeVM),
+					testAccResourceVSphereFolderCheckTags("terraform-test-tag"),
+				),
+			},
+			{
+				Config: testAccResourceVSphereFolderConfigMultiTag(),
+				Check: resource.ComposeTestCheckFunc(
+					testAccResourceVSphereFolderExists(true),
+					testAccResourceVSphereFolderHasName(testAccResourceVSphereFolderConfigExpectedName),
+					testAccResourceVSphereFolderHasType(folder.VSphereFolderTypeVM),
+					testAccResourceVSphereFolderCheckTags("terraform-test-tags-alt"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccResourceVSphereFolder_modifyTagsMultiStage(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() {
+			testAccPreCheck(t)
+		},
+		Providers:    testAccProviders,
+		CheckDestroy: testAccResourceVSphereFolderExists(false),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccResourceVSphereFolderConfigTag(),
+				Check: resource.ComposeTestCheckFunc(
+					testAccResourceVSphereFolderExists(true),
+					testAccResourceVSphereFolderHasName(testAccResourceVSphereFolderConfigExpectedName),
+					testAccResourceVSphereFolderHasType(folder.VSphereFolderTypeVM),
+				),
+			},
+			{
+				Config: testAccResourceVSphereFolderConfigAllTag(),
+				Check: resource.ComposeTestCheckFunc(
+					testAccResourceVSphereFolderExists(true),
+					testAccResourceVSphereFolderHasName(testAccResourceVSphereFolderConfigExpectedName),
+					testAccResourceVSphereFolderHasType(folder.VSphereFolderTypeVM),
+				),
+			},
+			{
+				Config: testAccResourceVSphereFolderConfigMultiTag(),
+				Check: resource.ComposeTestCheckFunc(
+					testAccResourceVSphereFolderExists(true),
+					testAccResourceVSphereFolderHasName(testAccResourceVSphereFolderConfigExpectedName),
+					testAccResourceVSphereFolderHasType(folder.VSphereFolderTypeVM),
+				),
+			},
+		},
+	})
+}
+
+func TestAccResourceVSphereFolder_customAttributes(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() {
+			testAccPreCheck(t)
+		},
+		Providers:    testAccProviders,
+		CheckDestroy: testAccResourceVSphereFolderExists(false),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccResourceVSphereFolderCustomAttribute(),
+				Check: resource.ComposeTestCheckFunc(
+					testAccResourceVSphereFolderExists(true),
+					testAccResourceVSphereFolderHasName(testAccResourceVSphereFolderConfigExpectedName),
+					testAccResourceVSphereFolderHasType(folder.VSphereFolderTypeVM),
+					testAccResourceVSphereFolderHasCustomAttributes(),
+				),
+			},
+		},
+	})
+}
+
+func TestAccResourceVSphereFolder_modifyCustomAttributes(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() {
+			testAccPreCheck(t)
+		},
+		Providers:    testAccProviders,
+		CheckDestroy: testAccResourceVSphereFolderExists(false),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccResourceVSphereFolderCustomAttribute(),
+				Check: resource.ComposeTestCheckFunc(
+					testAccResourceVSphereFolderExists(true),
+					testAccResourceVSphereFolderHasName(testAccResourceVSphereFolderConfigExpectedName),
+					testAccResourceVSphereFolderHasType(folder.VSphereFolderTypeVM),
+					testAccResourceVSphereFolderHasCustomAttributes(),
+				),
+			},
+			{
+				Config: testAccResourceVSphereFolderMultiCustomAttributes(),
+				Check: resource.ComposeTestCheckFunc(
+					testAccResourceVSphereFolderExists(true),
+					testAccResourceVSphereFolderHasName(testAccResourceVSphereFolderConfigExpectedName),
+					testAccResourceVSphereFolderHasType(folder.VSphereFolderTypeVM),
+					testAccResourceVSphereFolderHasCustomAttributes(),
+				),
+			},
+		},
+	})
+}
+
+func TestAccResourceVSphereFolder_removeAllCustomAttributes(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() {
+			testAccPreCheck(t)
+		},
+		Providers:    testAccProviders,
+		CheckDestroy: testAccResourceVSphereFolderExists(false),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccResourceVSphereFolderMultiCustomAttributes(),
+				Check: resource.ComposeTestCheckFunc(
+					testAccResourceVSphereFolderExists(true),
+					testAccResourceVSphereFolderHasName(testAccResourceVSphereFolderConfigExpectedName),
+					testAccResourceVSphereFolderHasType(folder.VSphereFolderTypeVM),
+					testAccResourceVSphereFolderHasCustomAttributes(),
+				),
+			},
+			{
+				Config: testAccResourceVSphereFolderRemovedCustomAttributes(),
+				Check: resource.ComposeTestCheckFunc(
+					testAccResourceVSphereFolderExists(true),
+					testAccResourceVSphereFolderHasName(testAccResourceVSphereFolderConfigExpectedName),
+					testAccResourceVSphereFolderHasType(folder.VSphereFolderTypeVM),
+					testAccResourceVSphereFolderHasCustomAttributes(),
+				),
+			},
+		},
+	})
+}
+
+func TestAccResourceVSphereFolder_preventDeleteIfNotEmpty(t *testing.T) {
+	var s *terraform.State
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:  func() { testAccPreCheck(t) },
-		Providers: testAccProviders,
-		CheckDestroy: resource.ComposeTestCheckFunc(
-			assertVSphereFolderExists(datacenter, existingPath),
-			removeVSphereFolder(datacenter, existingPath, ""),
-		),
+		PreCheck: func() {
+			testAccPreCheck(t)
+		},
+		Providers:    testAccProviders,
+		CheckDestroy: testAccResourceVSphereFolderExists(false),
 		Steps: []resource.TestStep{
-			resource.TestStep{
+			{
+				Config: testAccResourceVSphereFolderConfigBasic(
+					testAccResourceVSphereFolderConfigExpectedName,
+					folder.VSphereFolderTypeVM,
+				),
+				Check: resource.ComposeTestCheckFunc(
+					testAccResourceVSphereFolderExists(true),
+					testAccResourceVSphereFolderHasName(testAccResourceVSphereFolderConfigExpectedName),
+					testAccResourceVSphereFolderHasType(folder.VSphereFolderTypeVM),
+					copyStatePtr(&s),
+				),
+			},
+			{
 				PreConfig: func() {
-					createVSphereFolder(datacenter, existingPath)
+					if err := testAccResourceVSphereFolderCreateOOB(s); err != nil {
+						panic(err)
+					}
 				},
-				Config: fmt.Sprintf(
-					testAccCheckVSphereFolderConfig,
-					testMethod,
-					path,
-					datacenter,
+				Config: testAccResourceVSphereFolderConfigBasic(
+					testAccResourceVSphereFolderConfigExpectedName,
+					folder.VSphereFolderTypeVM,
 				),
-				Check: resource.ComposeTestCheckFunc(
-					testAccCheckVSphereFolderExistingPathExists(resourceName, &f),
-					resource.TestCheckResourceAttr(
-						resourceName, "path", path),
-					resource.TestCheckResourceAttr(
-						resourceName, "existing_path", existingPath),
+				Destroy:     true,
+				ExpectError: regexp.MustCompile("folder is not empty, please remove all items before deleting"),
+			},
+			{
+				PreConfig: func() {
+					if err := testAccResourceVSphereFolderDeleteOOB(s); err != nil {
+						panic(err)
+					}
+				},
+				Config: testAccResourceVSphereFolderConfigBasic(
+					testAccResourceVSphereFolderConfigExpectedName,
+					folder.VSphereFolderTypeVM,
 				),
 			},
 		},
 	})
 }
 
-func testAccCheckVSphereFolderDestroy(s *terraform.State) error {
-	client := testAccProvider.Meta().(*VSphereClient).vimClient
-	finder := find.NewFinder(client.Client, true)
-
-	for _, rs := range s.RootModule().Resources {
-		if rs.Type != "vsphere_folder" {
-			continue
-		}
-
-		dc, err := finder.Datacenter(context.TODO(), rs.Primary.Attributes["datacenter"])
-		if err != nil {
-			return fmt.Errorf("error %s", err)
-		}
-
-		dcFolders, err := dc.Folders(context.TODO())
-		if err != nil {
-			return fmt.Errorf("error %s", err)
-		}
-
-		f, err := object.NewSearchIndex(client.Client).FindChild(context.TODO(), dcFolders.VmFolder, rs.Primary.Attributes["path"])
-		if f != nil {
-			return fmt.Errorf("Record still exists")
-		}
-	}
-
-	return nil
+func TestAccResourceVSphereFolder_import(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() {
+			testAccPreCheck(t)
+		},
+		Providers:    testAccProviders,
+		CheckDestroy: testAccResourceVSphereFolderExists(false),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccResourceVSphereFolderConfigBasic(
+					testAccResourceVSphereFolderConfigExpectedName,
+					folder.VSphereFolderTypeVM,
+				),
+				Check: resource.ComposeTestCheckFunc(
+					testAccResourceVSphereFolderExists(true),
+				),
+			},
+			{
+				ResourceName:      "vsphere_folder.folder",
+				ImportState:       true,
+				ImportStateVerify: true,
+				ImportStateIdFunc: func(s *terraform.State) (string, error) {
+					folder, err := testGetFolder(s, "folder")
+					if err != nil {
+						return "", err
+					}
+					return folder.InventoryPath, nil
+				},
+				Config: testAccResourceVSphereFolderConfigBasic(
+					testAccResourceVSphereFolderConfigExpectedName,
+					folder.VSphereFolderTypeVM,
+				),
+				Check: resource.ComposeTestCheckFunc(
+					testAccResourceVSphereFolderExists(true),
+					testAccResourceVSphereFolderHasName(testAccResourceVSphereFolderConfigExpectedName),
+					testAccResourceVSphereFolderHasType(folder.VSphereFolderTypeVM),
+				),
+			},
+		},
+	})
 }
 
-func testAccCheckVSphereFolderExists(n string, f *folder) resource.TestCheckFunc {
+func testAccResourceVSphereFolderExists(expected bool) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		rs, ok := s.RootModule().Resources[n]
-		if !ok {
-			return fmt.Errorf("Resource not found: %s", n)
-		}
-
-		if rs.Primary.ID == "" {
-			return fmt.Errorf("No ID is set")
-		}
-
-		client := testAccProvider.Meta().(*VSphereClient).vimClient
-		finder := find.NewFinder(client.Client, true)
-
-		dc, err := finder.Datacenter(context.TODO(), rs.Primary.Attributes["datacenter"])
+		folder, err := testGetFolder(s, "folder")
 		if err != nil {
-			return fmt.Errorf("error %s", err)
+			if viapi.IsManagedObjectNotFoundError(err) && expected == false {
+				// Expected missing
+				return nil
+			}
+			return err
 		}
-
-		dcFolders, err := dc.Folders(context.TODO())
-		if err != nil {
-			return fmt.Errorf("error %s", err)
+		if !expected {
+			return fmt.Errorf("expected folder %q to be missing", folder.Reference().Value)
 		}
-
-		_, err = object.NewSearchIndex(client.Client).FindChild(context.TODO(), dcFolders.VmFolder, rs.Primary.Attributes["path"])
-
-		*f = folder{
-			path: rs.Primary.Attributes["path"],
-		}
-
 		return nil
 	}
 }
 
-func testAccCheckVSphereFolderExistingPathExists(n string, f *folder) resource.TestCheckFunc {
+func testAccResourceVSphereFolderHasName(expected string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		rs, ok := s.RootModule().Resources[n]
-		if !ok {
-			return fmt.Errorf("Resource %s not found in %#v", n, s.RootModule().Resources)
-		}
-
-		if rs.Primary.ID == "" {
-			return fmt.Errorf("No ID is set")
-		}
-
-		client := testAccProvider.Meta().(*VSphereClient).vimClient
-		finder := find.NewFinder(client.Client, true)
-
-		dc, err := finder.Datacenter(context.TODO(), rs.Primary.Attributes["datacenter"])
+		props, err := testGetFolderProperties(s, "folder")
 		if err != nil {
-			return fmt.Errorf("error %s", err)
+			return err
 		}
-
-		dcFolders, err := dc.Folders(context.TODO())
-		if err != nil {
-			return fmt.Errorf("error %s", err)
+		actual := props.Name
+		if expected != actual {
+			return fmt.Errorf("expected name to be %q, got %q", expected, actual)
 		}
-
-		_, err = object.NewSearchIndex(client.Client).FindChild(context.TODO(), dcFolders.VmFolder, rs.Primary.Attributes["existing_path"])
-
-		*f = folder{
-			path: rs.Primary.Attributes["path"],
-		}
-
 		return nil
 	}
 }
 
-func assertVSphereFolderExists(datacenter string, folder_name string) resource.TestCheckFunc {
-
+func testAccResourceVSphereFolderHasType(expected folder.VSphereFolderType) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client := testAccProvider.Meta().(*VSphereClient).vimClient
-		folder, err := object.NewSearchIndex(client.Client).FindByInventoryPath(
-			context.TODO(), fmt.Sprintf("%v/vm/%v", datacenter, folder_name))
+		f, err := testGetFolder(s, "folder")
 		if err != nil {
-			return fmt.Errorf("Error: %s", err)
-		} else if folder == nil {
-			return fmt.Errorf("Folder %s does not exist!", folder_name)
+			return err
 		}
-
+		actual, err := folder.FindType(f)
+		if err != nil {
+			return err
+		}
+		if expected != actual {
+			return fmt.Errorf("expected type to be %q, got %q", expected, actual)
+		}
 		return nil
 	}
 }
 
-func createVSphereFolder(datacenter string, folder_name string) error {
+func testAccResourceVSphereFolderHasParent(expectedRoot bool, expectedName string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		props, err := testGetFolderProperties(s, "folder")
+		if err != nil {
+			return err
+		}
+		if props.Parent.Type != "Folder" && !expectedRoot {
+			return fmt.Errorf("folder %q is a root folder", props.Name)
+		}
+		client := testAccProvider.Meta().(*VSphereClient).vimClient
+		pfolder, err := folder.FromID(client, props.Parent.Value)
+		if err != nil {
+			return err
+		}
+		pprops, err := folder.Properties(pfolder)
+		if err != nil {
+			return err
+		}
 
-	client := testAccProvider.Meta().(*VSphereClient).vimClient
+		actual := pprops.Name
+		if expectedName != actual {
+			return fmt.Errorf("expected parent folder name to be %q, got %q", expectedName, actual)
+		}
+		return nil
+	}
+}
 
-	f := folder{path: folder_name, datacenter: datacenter}
+// testAccResourceVSphereFolderCheckTags is a check to ensure that any
+// tags that have been created with the supplied resource name have been
+// attached to the folder.
+func testAccResourceVSphereFolderCheckTags(tagResName string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		folder, err := testGetFolder(s, "folder")
+		if err != nil {
+			return err
+		}
+		tagsClient, err := testAccProvider.Meta().(*VSphereClient).TagsClient()
+		if err != nil {
+			return err
+		}
+		return testObjectHasTags(s, tagsClient, folder, tagResName)
+	}
+}
 
-	folder, err := object.NewSearchIndex(client.Client).FindByInventoryPath(
-		context.TODO(), fmt.Sprintf("%v/vm/%v", datacenter, folder_name))
+// testAccResourceVSphereFolderCheckNoTags is a check to ensure that a folder
+// has no tags on it. This is used by the vsphere_tag tests specifically to
+// test to make sure that complete tag removal is explicitly working without
+// having to rely on the simple empty diff test after the final step.
+func testAccResourceVSphereFolderCheckNoTags() resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		folder, err := testGetFolder(s, "folder")
+		if err != nil {
+			return err
+		}
+		tagsClient, err := testAccProvider.Meta().(*VSphereClient).TagsClient()
+		if err != nil {
+			return err
+		}
+		return testObjectHasNoTags(s, tagsClient, folder)
+	}
+}
+
+func testAccResourceVSphereFolderHasCustomAttributes() resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		props, err := testGetFolderProperties(s, "folder")
+		if err != nil {
+			return err
+		}
+		return testResourceHasCustomAttributeValues(s, "vsphere_folder", "folder", props.Entity())
+	}
+}
+
+// testAccResourceVSphereFolderCreateOOB creates an out-of-band folder that is
+// not tracked by TF. This is used in deletion checks to make sure we don't
+// perform unsafe recursive deletions.
+func testAccResourceVSphereFolderCreateOOB(s *terraform.State) error {
+	folder, err := testGetFolder(s, "folder")
 	if err != nil {
-		return fmt.Errorf("error %s", err)
+		return err
 	}
-
-	if folder == nil {
-		createFolder(client, &f)
-	} else {
-		return fmt.Errorf("Folder %s already exists", folder_name)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultAPITimeout)
+	defer cancel()
+	if _, err := folder.CreateFolder(ctx, testAccResourceVSphereFolderConfigOOBName); err != nil {
+		return err
 	}
-
 	return nil
 }
 
-func removeVSphereFolder(datacenter string, folder_name string, existing_path string) resource.TestCheckFunc {
-
-	f := folder{path: folder_name, datacenter: datacenter, existingPath: existing_path}
-
-	return func(s *terraform.State) error {
-
-		client := testAccProvider.Meta().(*VSphereClient).vimClient
-		// finder := find.NewFinder(client.Client, true)
-
-		folder, _ := object.NewSearchIndex(client.Client).FindByInventoryPath(
-			context.TODO(), fmt.Sprintf("%v/vm/%v", datacenter, folder_name))
-		if folder != nil {
-			deleteFolder(client, &f)
-		}
-
-		return nil
+// testAccResourceVSphereFolderDeleteOOB wipes any child items in the test
+// folder resource. This is used to reverse the actions of
+// testAccResourceVSphereFolderCreateOOB so we can properly clean up the test.
+func testAccResourceVSphereFolderDeleteOOB(s *terraform.State) error {
+	client := testAccProvider.Meta().(*VSphereClient).vimClient
+	folder, err := testGetFolder(s, "folder")
+	if err != nil {
+		return err
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), defaultAPITimeout)
+	defer cancel()
+	refs, err := folder.Children(ctx)
+	if err != nil {
+		return err
+	}
+	for _, ref := range refs {
+		me := object.NewCommon(client.Client, ref.Reference())
+		dctx, dcancel := context.WithTimeout(context.Background(), defaultAPITimeout)
+		defer dcancel()
+		task, err := me.Destroy(dctx)
+		if err != nil {
+			return err
+		}
+		tctx, tcancel := context.WithTimeout(context.Background(), defaultAPITimeout)
+		defer tcancel()
+		if err := task.Wait(tctx); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-const testAccCheckVSphereFolderConfig = `
-resource "vsphere_folder" "%s" {
-	path = "%s"
-	datacenter = "%s"
+func testAccResourceVSphereFolderConfigBasic(name string, ft folder.VSphereFolderType) string {
+	return fmt.Sprintf(`
+variable "datacenter" {
+  default = "%s"
 }
-`
+
+variable "folder_name" {
+  default = "%s"
+}
+
+variable "folder_type" {
+  default = "%s"
+}
+
+data "vsphere_datacenter" "dc" {
+  name = "${var.datacenter}"
+}
+
+resource "vsphere_folder" "folder" {
+  path          = "${var.folder_name}"
+  type          = "${var.folder_type}"
+  datacenter_id = "${data.vsphere_datacenter.dc.id}"
+}
+`,
+		os.Getenv("VSPHERE_DATACENTER"),
+		name,
+		ft,
+	)
+}
+
+func testAccResourceVSphereFolderConfigSubFolder(name string, ft folder.VSphereFolderType) string {
+	return fmt.Sprintf(`
+variable "datacenter" {
+  default = "%s"
+}
+
+variable "folder_name" {
+  default = "%s"
+}
+
+variable "folder_type" {
+  default = "%s"
+}
+
+variable "parent_name" {
+  default = "%s"
+}
+
+data "vsphere_datacenter" "dc" {
+  name = "${var.datacenter}"
+}
+
+resource "vsphere_folder" "parent" {
+  path          = "${var.parent_name}"
+  type          = "${var.folder_type}"
+  datacenter_id = "${data.vsphere_datacenter.dc.id}"
+}
+
+resource "vsphere_folder" "folder" {
+  path          = "${vsphere_folder.parent.path}/${var.folder_name}"
+  type          = "${var.folder_type}"
+  datacenter_id = "${data.vsphere_datacenter.dc.id}"
+}
+`,
+		os.Getenv("VSPHERE_DATACENTER"),
+		name,
+		ft,
+		testAccResourceVSphereFolderConfigExpectedParentName,
+	)
+}
+
+func testAccResourceVSphereFolderConfigDatacenter() string {
+	return fmt.Sprintf(`
+variable "folder_name" {
+  default = "%s"
+}
+
+variable "folder_type" {
+  default = "%s"
+}
+
+resource "vsphere_folder" "folder" {
+  path          = "${var.folder_name}"
+  type          = "${var.folder_type}"
+}
+`,
+		testAccResourceVSphereFolderConfigExpectedName,
+		folder.VSphereFolderTypeDatacenter,
+	)
+}
+
+func testAccResourceVSphereFolderConfigTag() string {
+	return fmt.Sprintf(`
+variable "datacenter" {
+  default = "%s"
+}
+
+variable "folder_name" {
+  default = "%s"
+}
+
+variable "folder_type" {
+  default = "%s"
+}
+
+data "vsphere_datacenter" "dc" {
+  name = "${var.datacenter}"
+}
+
+resource "vsphere_tag_category" "terraform-test-category" {
+  name        = "terraform-test-tag-category"
+  cardinality = "MULTIPLE"
+
+  associable_types = [
+    "Folder",
+  ]
+}
+
+resource "vsphere_tag" "terraform-test-tag" {
+  name        = "terraform-test-tag"
+  category_id = "${vsphere_tag_category.terraform-test-category.id}"
+}
+
+resource "vsphere_folder" "folder" {
+  path          = "${var.folder_name}"
+  type          = "${var.folder_type}"
+  datacenter_id = "${data.vsphere_datacenter.dc.id}"
+  tags          = ["${vsphere_tag.terraform-test-tag.id}"]
+}
+`,
+		os.Getenv("VSPHERE_DATACENTER"),
+		testAccResourceVSphereFolderConfigExpectedName,
+		folder.VSphereFolderTypeVM,
+	)
+}
+
+func testAccResourceVSphereFolderConfigAllTag() string {
+	return fmt.Sprintf(`
+variable "datacenter" {
+  default = "%s"
+}
+
+variable "folder_name" {
+  default = "%s"
+}
+
+variable "folder_type" {
+  default = "%s"
+}
+
+variable "extra_tags" {
+  default = [
+    "terraform-test-thing1",
+    "terraform-test-thing2",
+  ]
+}
+
+data "vsphere_datacenter" "dc" {
+  name = "${var.datacenter}"
+}
+
+resource "vsphere_tag_category" "terraform-test-category" {
+  name        = "terraform-test-tag-category"
+  cardinality = "MULTIPLE"
+
+  associable_types = [
+    "Folder",
+  ]
+}
+
+resource "vsphere_tag" "terraform-test-tag" {
+  name        = "terraform-test-tag"
+  category_id = "${vsphere_tag_category.terraform-test-category.id}"
+}
+
+resource "vsphere_tag" "terraform-test-tags-alt" {
+  count       = "${length(var.extra_tags)}"
+  name        = "${var.extra_tags[count.index]}"
+  category_id = "${vsphere_tag_category.terraform-test-category.id}"
+}
+
+resource "vsphere_folder" "folder" {
+  path          = "${var.folder_name}"
+  type          = "${var.folder_type}"
+  datacenter_id = "${data.vsphere_datacenter.dc.id}"
+  tags          = ["${vsphere_tag.terraform-test-tag.id}", "${vsphere_tag.terraform-test-tags-alt.0.id}", "${vsphere_tag.terraform-test-tags-alt.1.id}"]
+}
+`,
+		os.Getenv("VSPHERE_DATACENTER"),
+		testAccResourceVSphereFolderConfigExpectedName,
+		folder.VSphereFolderTypeVM,
+	)
+}
+
+func testAccResourceVSphereFolderConfigMultiTag() string {
+	return fmt.Sprintf(`
+variable "datacenter" {
+  default = "%s"
+}
+
+variable "folder_name" {
+  default = "%s"
+}
+
+variable "folder_type" {
+  default = "%s"
+}
+
+variable "extra_tags" {
+  default = [
+    "terraform-test-thing1",
+    "terraform-test-thing2",
+  ]
+}
+
+data "vsphere_datacenter" "dc" {
+  name = "${var.datacenter}"
+}
+
+resource "vsphere_tag_category" "terraform-test-category" {
+  name        = "terraform-test-tag-category"
+  cardinality = "MULTIPLE"
+
+  associable_types = [
+    "Folder",
+  ]
+}
+
+resource "vsphere_tag" "terraform-test-tag" {
+  name        = "terraform-test-tag"
+  category_id = "${vsphere_tag_category.terraform-test-category.id}"
+}
+
+resource "vsphere_tag" "terraform-test-tags-alt" {
+  count       = "${length(var.extra_tags)}"
+  name        = "${var.extra_tags[count.index]}"
+  category_id = "${vsphere_tag_category.terraform-test-category.id}"
+}
+
+resource "vsphere_folder" "folder" {
+  path          = "${var.folder_name}"
+  type          = "${var.folder_type}"
+  datacenter_id = "${data.vsphere_datacenter.dc.id}"
+  tags          = "${vsphere_tag.terraform-test-tags-alt.*.id}"
+}
+`,
+		os.Getenv("VSPHERE_DATACENTER"),
+		testAccResourceVSphereFolderConfigExpectedName,
+		folder.VSphereFolderTypeVM,
+	)
+}
+
+func testAccResourceVSphereFolderCustomAttribute() string {
+	return fmt.Sprintf(`
+variable "datacenter" {
+  default = "%s"
+}
+
+variable "folder_name" {
+  default = "%s"
+}
+
+variable "folder_type" {
+  default = "%s"
+}
+
+data "vsphere_datacenter" "dc" {
+  name = "${var.datacenter}"
+}
+
+resource "vsphere_custom_attribute" "terraform-test-attribute" {
+  name                = "terraform-test-attribute"
+  managed_object_type = "Folder"
+}
+
+locals {
+  folder_attrs = {
+    "${vsphere_custom_attribute.terraform-test-attribute.id}" = "value"
+  }
+}
+
+resource "vsphere_folder" "folder" {
+  path          = "${var.folder_name}"
+  type          = "${var.folder_type}"
+  datacenter_id = "${data.vsphere_datacenter.dc.id}"
+  custom_attributes = "${local.folder_attrs}"
+}
+`,
+		os.Getenv("VSPHERE_DATACENTER"),
+		testAccResourceVSphereFolderConfigExpectedName,
+		folder.VSphereFolderTypeVM,
+	)
+}
+
+func testAccResourceVSphereFolderMultiCustomAttributes() string {
+	return fmt.Sprintf(`
+variable "datacenter" {
+  default = "%s"
+}
+
+variable "folder_name" {
+  default = "%s"
+}
+
+variable "folder_type" {
+  default = "%s"
+}
+
+data "vsphere_datacenter" "dc" {
+  name = "${var.datacenter}"
+}
+
+resource "vsphere_custom_attribute" "terraform-test-attribute" {
+  name                = "terraform-test-attribute"
+  managed_object_type = "Folder"
+}
+
+resource "vsphere_custom_attribute" "terraform-test-attribute-2" {
+  name                = "terraform-test-attribute-2"
+  managed_object_type = "Folder"
+}
+
+locals {
+  folder_attrs = {
+    "${vsphere_custom_attribute.terraform-test-attribute.id}" = "value"
+    "${vsphere_custom_attribute.terraform-test-attribute-2.id}" = "value-2"
+  }
+}
+
+resource "vsphere_folder" "folder" {
+  path          = "${var.folder_name}"
+  type          = "${var.folder_type}"
+  datacenter_id = "${data.vsphere_datacenter.dc.id}"
+  custom_attributes = "${local.folder_attrs}"
+}
+`,
+		os.Getenv("VSPHERE_DATACENTER"),
+		testAccResourceVSphereFolderConfigExpectedName,
+		folder.VSphereFolderTypeVM,
+	)
+}
+
+func testAccResourceVSphereFolderRemovedCustomAttributes() string {
+	return fmt.Sprintf(`
+variable "datacenter" {
+  default = "%s"
+}
+
+variable "folder_name" {
+  default = "%s"
+}
+
+variable "folder_type" {
+  default = "%s"
+}
+
+data "vsphere_datacenter" "dc" {
+  name = "${var.datacenter}"
+}
+
+resource "vsphere_custom_attribute" "terraform-test-attribute" {
+  name                = "terraform-test-attribute"
+  managed_object_type = "Folder"
+}
+
+resource "vsphere_custom_attribute" "terraform-test-attribute-2" {
+  name                = "terraform-test-attribute-2"
+  managed_object_type = "Folder"
+}
+
+resource "vsphere_folder" "folder" {
+  path          = "${var.folder_name}"
+  type          = "${var.folder_type}"
+  datacenter_id = "${data.vsphere_datacenter.dc.id}"
+}
+`,
+		os.Getenv("VSPHERE_DATACENTER"),
+		testAccResourceVSphereFolderConfigExpectedName,
+		folder.VSphereFolderTypeVM,
+	)
+}

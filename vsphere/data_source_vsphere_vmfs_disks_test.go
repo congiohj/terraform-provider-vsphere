@@ -6,58 +6,43 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform/helper/resource"
+	"github.com/hashicorp/terraform/terraform"
 )
 
-func TestAccDataSourceVSphereVmfsDisks(t *testing.T) {
-	var tp *testing.T
-	testAccDataSourceVSphereVmfsDisksCases := []struct {
-		name     string
-		testCase resource.TestCase
-	}{
-		{
-			"basic",
-			resource.TestCase{
-				PreCheck: func() {
-					testAccPreCheck(tp)
-					testAccDataSourceVSphereVmfsDisksPreCheck(tp)
-				},
-				Providers: testAccProviders,
-				Steps: []resource.TestStep{
-					{
-						Config: testAccDataSourceVSphereVmfsDisksConfig(),
-						Check: resource.ComposeTestCheckFunc(
-							resource.TestCheckOutput("found", "true"),
-						),
-					},
-				},
+func TestAccDataSourceVSphereVmfsDisks_basic(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() {
+			testAccPreCheck(t)
+			testAccDataSourceVSphereVmfsDisksPreCheck(t)
+		},
+		Providers: testAccProviders,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccDataSourceVSphereVmfsDisksConfig(),
+				Check: resource.ComposeTestCheckFunc(
+					testCheckOutputBool("found", true),
+				),
 			},
 		},
-		{
-			"with regular expression",
-			resource.TestCase{
-				PreCheck: func() {
-					testAccPreCheck(tp)
-					testAccDataSourceVSphereVmfsDisksPreCheck(tp)
-				},
-				Providers: testAccProviders,
-				Steps: []resource.TestStep{
-					{
-						Config: testAccDataSourceVSphereVmfsDisksConfigRegexp(),
-						Check: resource.ComposeTestCheckFunc(
-							resource.TestCheckOutput("expected_length", "true"),
-						),
-					},
-				},
-			},
-		},
-	}
+	})
+}
 
-	for _, tc := range testAccDataSourceVSphereVmfsDisksCases {
-		t.Run(tc.name, func(t *testing.T) {
-			tp = t
-			resource.Test(t, tc.testCase)
-		})
-	}
+func TestAccDataSourceVSphereVmfsDisks_withRegularExpression(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() {
+			testAccPreCheck(t)
+			testAccDataSourceVSphereVmfsDisksPreCheck(t)
+		},
+		Providers: testAccProviders,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccDataSourceVSphereVmfsDisksConfigRegexp(),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckOutput("expected_length", "true"),
+				),
+			},
+		},
+	})
 }
 
 func testAccDataSourceVSphereVmfsDisksPreCheck(t *testing.T) {
@@ -69,6 +54,27 @@ func testAccDataSourceVSphereVmfsDisksPreCheck(t *testing.T) {
 	}
 	if os.Getenv("VSPHERE_VMFS_REGEXP") == "" {
 		t.Skip("set VSPHERE_VMFS_REGEXP to run vsphere_vmfs_disks acceptance tests")
+	}
+}
+
+// testCheckOutputBool checks an output in the Terraform configuration
+func testCheckOutputBool(name string, value bool) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		ms := s.RootModule()
+		rs, ok := ms.Outputs[name]
+		if !ok {
+			return fmt.Errorf("Not found: %s", name)
+		}
+
+		if rs.Value != value {
+			return fmt.Errorf(
+				"Output '%s': expected %#v, got %#v",
+				name,
+				value,
+				rs)
+		}
+
+		return nil
 	}
 }
 
@@ -117,7 +123,7 @@ data "vsphere_vmfs_disks" "available" {
 }
 
 output "expected_length" {
-  value = "${length(data.vsphere_vmfs_disks.available.disks) == 2 ? "true" : "false" }"
+  value = "${length(data.vsphere_vmfs_disks.available.disks) == 3 ? "true" : "false" }"
 }
 `, os.Getenv("VSPHERE_VMFS_REGEXP"), os.Getenv("VSPHERE_DATACENTER"), os.Getenv("VSPHERE_ESXI_HOST"))
 }

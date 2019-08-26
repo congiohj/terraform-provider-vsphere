@@ -3,6 +3,7 @@ package vsphere
 import (
 	"github.com/hashicorp/terraform/helper/schema"
 	"github.com/hashicorp/terraform/helper/validation"
+	"github.com/terraform-providers/terraform-provider-vsphere/vsphere/internal/helper/structure"
 	"github.com/vmware/govmomi/vim25/types"
 )
 
@@ -25,79 +26,79 @@ var hostNetworkPolicyNicTeamingPolicyAllowedValues = []string{
 func schemaHostNetworkPolicy() map[string]*schema.Schema {
 	return map[string]*schema.Schema{
 		// HostNicTeamingPolicy/HostNicFailureCriteria
-		"check_beacon": &schema.Schema{
+		"check_beacon": {
 			Type:        schema.TypeBool,
 			Optional:    true,
 			Description: "Enable beacon probing. Requires that the vSwitch has been configured to use a beacon. If disabled, link status is used only.",
 		},
 
 		// HostNicTeamingPolicy/HostNicOrderPolicy
-		"active_nics": &schema.Schema{
+		"active_nics": {
 			Type:        schema.TypeList,
 			Description: "List of active network adapters used for load balancing.",
 			Elem:        &schema.Schema{Type: schema.TypeString},
 		},
-		"standby_nics": &schema.Schema{
+		"standby_nics": {
 			Type:        schema.TypeList,
 			Description: "List of standby network adapters used for failover.",
 			Elem:        &schema.Schema{Type: schema.TypeString},
 		},
 
 		// HostNicTeamingPolicy
-		"teaming_policy": &schema.Schema{
+		"teaming_policy": {
 			Type:         schema.TypeString,
 			Optional:     true,
 			Description:  "The network adapter teaming policy. Can be one of loadbalance_ip, loadbalance_srcmac, loadbalance_srcid, or failover_explicit.",
 			ValidateFunc: validation.StringInSlice(hostNetworkPolicyNicTeamingPolicyAllowedValues, false),
 		},
-		"notify_switches": &schema.Schema{
+		"notify_switches": {
 			Type:        schema.TypeBool,
 			Optional:    true,
 			Description: "If true, the teaming policy will notify the broadcast network of a NIC failover, triggering cache updates.",
 		},
-		"failback": &schema.Schema{
+		"failback": {
 			Type:        schema.TypeBool,
 			Optional:    true,
 			Description: "If true, the teaming policy will re-activate failed interfaces higher in precedence when they come back up.",
 		},
 
 		// HostNetworkSecurityPolicy
-		"allow_promiscuous": &schema.Schema{
+		"allow_promiscuous": {
 			Type:        schema.TypeBool,
 			Optional:    true,
 			Description: "Enable promiscuous mode on the network. This flag indicates whether or not all traffic is seen on a given port.",
 		},
-		"allow_forged_transmits": &schema.Schema{
+		"allow_forged_transmits": {
 			Type:        schema.TypeBool,
 			Optional:    true,
 			Description: "Controls whether or not the virtual network adapter is allowed to send network traffic with a different MAC address than that of its own.",
 		},
-		"allow_mac_changes": &schema.Schema{
+		"allow_mac_changes": {
 			Type:        schema.TypeBool,
 			Optional:    true,
 			Description: "Controls whether or not the Media Access Control (MAC) address can be changed.",
 		},
 
 		// HostNetworkTrafficShapingPolicy
-		"shaping_average_bandwidth": &schema.Schema{
+		"shaping_average_bandwidth": {
 			Type:        schema.TypeInt,
 			Optional:    true,
-			Description: "The average bandwidth in bits per second if shaping is enabled on the port.",
+			Description: "The average bandwidth in bits per second if traffic shaping is enabled.",
 		},
-		"shaping_burst_size": &schema.Schema{
+		"shaping_burst_size": {
 			Type:        schema.TypeInt,
 			Optional:    true,
-			Description: "The maximum burst size allowed in bytes if shaping is enabled on the port.",
+			Description: "The maximum burst size allowed in bytes if traffic shaping is enabled.",
 		},
-		"shaping_enabled": &schema.Schema{
+		"shaping_enabled": {
 			Type:        schema.TypeBool,
 			Optional:    true,
-			Description: "True if the traffic shaper is enabled on the port.",
+			Description: "Enable traffic shaping on this virtual switch or port group.",
 		},
-		"shaping_peak_bandwidth": &schema.Schema{
+		"shaping_peak_bandwidth": {
 			Type:        schema.TypeInt,
 			Optional:    true,
-			Description: "The peak bandwidth during bursts in bits per second if traffic shaping is enabled on the port.",
+			Description: "The peak bandwidth during bursts in bits per second if traffic shaping is enabled.",
 		},
 	}
 }
@@ -108,16 +109,16 @@ func expandHostNicFailureCriteria(d *schema.ResourceData) *types.HostNicFailureC
 	obj := &types.HostNicFailureCriteria{}
 
 	if v, ok := d.GetOkExists("check_beacon"); ok {
-		obj.CheckBeacon = boolPtr(v.(bool))
+		obj.CheckBeacon = structure.BoolPtr(v.(bool))
 	}
 
 	// These fields are deprecated and are set only to make things work. They are
 	// not exposed to Terraform.
 	obj.CheckSpeed = "minimum"
 	obj.Speed = 10
-	obj.CheckDuplex = boolPtr(false)
-	obj.FullDuplex = boolPtr(false)
-	obj.CheckErrorPercent = boolPtr(false)
+	obj.CheckDuplex = structure.BoolPtr(false)
+	obj.FullDuplex = structure.BoolPtr(false)
+	obj.CheckErrorPercent = structure.BoolPtr(false)
 	obj.Percentage = 0
 
 	return obj
@@ -141,8 +142,8 @@ func expandHostNicOrderPolicy(d *schema.ResourceData) *types.HostNicOrderPolicy 
 	if !activeOk && !standbyOk {
 		return nil
 	}
-	obj.ActiveNic = sliceInterfacesToStrings(activeNics.([]interface{}))
-	obj.StandbyNic = sliceInterfacesToStrings(standbyNics.([]interface{}))
+	obj.ActiveNic = structure.SliceInterfacesToStrings(activeNics.([]interface{}))
+	obj.StandbyNic = structure.SliceInterfacesToStrings(standbyNics.([]interface{}))
 	return obj
 }
 
@@ -152,10 +153,10 @@ func flattenHostNicOrderPolicy(d *schema.ResourceData, obj *types.HostNicOrderPo
 	if obj == nil {
 		return nil
 	}
-	if err := d.Set("active_nics", sliceStringsToInterfaces(obj.ActiveNic)); err != nil {
+	if err := d.Set("active_nics", structure.SliceStringsToInterfaces(obj.ActiveNic)); err != nil {
 		return err
 	}
-	if err := d.Set("standby_nics", sliceStringsToInterfaces(obj.StandbyNic)); err != nil {
+	if err := d.Set("standby_nics", structure.SliceStringsToInterfaces(obj.StandbyNic)); err != nil {
 		return err
 	}
 	return nil
@@ -168,17 +169,17 @@ func expandHostNicTeamingPolicy(d *schema.ResourceData) *types.HostNicTeamingPol
 		Policy: d.Get("teaming_policy").(string),
 	}
 	if v, ok := d.GetOkExists("failback"); ok {
-		obj.RollingOrder = boolPtr(!v.(bool))
+		obj.RollingOrder = structure.BoolPtr(!v.(bool))
 	}
 	if v, ok := d.GetOkExists("notify_switches"); ok {
-		obj.NotifySwitches = boolPtr(v.(bool))
+		obj.NotifySwitches = structure.BoolPtr(v.(bool))
 	}
 	obj.FailureCriteria = expandHostNicFailureCriteria(d)
 	obj.NicOrder = expandHostNicOrderPolicy(d)
 
 	// These fields are deprecated and are set only to make things work. They are
 	// not exposed to Terraform.
-	obj.ReversePolicy = boolPtr(true)
+	obj.ReversePolicy = structure.BoolPtr(true)
 
 	return obj
 }
@@ -208,13 +209,13 @@ func flattenHostNicTeamingPolicy(d *schema.ResourceData, obj *types.HostNicTeami
 func expandHostNetworkSecurityPolicy(d *schema.ResourceData) *types.HostNetworkSecurityPolicy {
 	obj := &types.HostNetworkSecurityPolicy{}
 	if v, ok := d.GetOkExists("allow_promiscuous"); ok {
-		obj.AllowPromiscuous = boolPtr(v.(bool))
+		obj.AllowPromiscuous = structure.BoolPtr(v.(bool))
 	}
 	if v, ok := d.GetOkExists("allow_forged_transmits"); ok {
-		obj.ForgedTransmits = boolPtr(v.(bool))
+		obj.ForgedTransmits = structure.BoolPtr(v.(bool))
 	}
 	if v, ok := d.GetOkExists("allow_mac_changes"); ok {
-		obj.MacChanges = boolPtr(v.(bool))
+		obj.MacChanges = structure.BoolPtr(v.(bool))
 	}
 	return obj
 }
@@ -243,7 +244,7 @@ func expandHostNetworkTrafficShapingPolicy(d *schema.ResourceData) *types.HostNe
 		PeakBandwidth:    int64(d.Get("shaping_peak_bandwidth").(int)),
 	}
 	if v, ok := d.GetOkExists("shaping_enabled"); ok {
-		obj.Enabled = boolPtr(v.(bool))
+		obj.Enabled = structure.BoolPtr(v.(bool))
 	}
 	return obj
 }

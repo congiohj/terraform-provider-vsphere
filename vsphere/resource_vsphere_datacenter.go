@@ -1,48 +1,81 @@
 package vsphere
 
 import (
+	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
+
+	"context"
 
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/helper/schema"
+	"github.com/terraform-providers/terraform-provider-vsphere/vsphere/internal/helper/customattribute"
+	"github.com/terraform-providers/terraform-provider-vsphere/vsphere/internal/helper/datacenter"
 	"github.com/vmware/govmomi/find"
 	"github.com/vmware/govmomi/object"
 	"github.com/vmware/govmomi/vim25/methods"
 	"github.com/vmware/govmomi/vim25/types"
-	"golang.org/x/net/context"
 )
 
 func resourceVSphereDatacenter() *schema.Resource {
 	return &schema.Resource{
 		Create: resourceVSphereDatacenterCreate,
 		Read:   resourceVSphereDatacenterRead,
+		Update: resourceVSphereDatacenterUpdate,
 		Delete: resourceVSphereDatacenterDelete,
+		Importer: &schema.ResourceImporter{
+			State: resourceVSphereDatacenterImport,
+		},
 
 		Schema: map[string]*schema.Schema{
-			"name": &schema.Schema{
+			"name": {
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
-			"folder": &schema.Schema{
+			"folder": {
 				Type:     schema.TypeString,
 				Optional: true,
 				ForceNew: true,
 			},
+			"moid": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				ForceNew:    true,
+				Description: "Managed object ID of the datacenter.",
+			},
+
+			// Add tags schema
+			vSphereTagAttributeKey: tagsSchema(),
+
+			// Custom Attributes
+			customattribute.ConfigKey: customattribute.ConfigSchema(),
 		},
 	}
 }
 
 func resourceVSphereDatacenterCreate(d *schema.ResourceData, meta interface{}) error {
 	client := meta.(*VSphereClient).vimClient
+
+	// Load up the tags client, which will validate a proper vCenter before
+	// attempting to proceed if we have tags defined.
+	tagsClient, err := tagsClientIfDefined(d, meta)
+	if err != nil {
+		return err
+	}
+	// Verify a proper vCenter before proceeding if custom attributes are defined
+	attrsProcessor, err := customattribute.GetDiffProcessorIfAttributesDefined(client, d)
+	if err != nil {
+		return err
+	}
+
 	name := d.Get("name").(string)
 
 	var f *object.Folder
 	if v, ok := d.GetOk("folder"); ok {
 		finder := find.NewFinder(client.Client, true)
-		var err error
 		f, err = finder.Folder(context.TODO(), v.(string))
 		if err != nil {
 			return fmt.Errorf("failed to find folder that will contain the datacenter: %s", err)
@@ -60,6 +93,8 @@ func resourceVSphereDatacenterCreate(d *schema.ResourceData, meta interface{}) e
 		return fmt.Errorf("ESX host does not belong to a vCenter")
 	}
 
+	d.SetId(name)
+
 	// Wait for the datacenter resource to be ready
 	stateConf := &resource.StateChangeConf{
 		Pending:    []string{"InProgress"},
@@ -75,33 +110,44 @@ func resourceVSphereDatacenterCreate(d *schema.ResourceData, meta interface{}) e
 		return fmt.Errorf("error waiting for datacenter (%s) to become ready: %s", name, err)
 	}
 
-	d.SetId(name)
+	// Apply any pending tags now
+	if tagsClient != nil {
+		if err := processTagDiff(tagsClient, d, dc); err != nil {
+			return err
+		}
+	}
+
+	// Set custom attributes
+	if attrsProcessor != nil {
+		if err := attrsProcessor.ProcessDiff(dc); err != nil {
+			return err
+		}
+	}
 
 	return resourceVSphereDatacenterRead(d, meta)
-
 }
 
 func resourceVSphereDatacenterStateRefreshFunc(d *schema.ResourceData, meta interface{}) resource.StateRefreshFunc {
 	return func() (interface{}, string, error) {
-		log.Print("[TRACE] Refreshing datacenter state")
+		log.Print("[DEBUG] Refreshing datacenter state")
 		dc, err := datacenterExists(d, meta)
 		if err != nil {
 			switch err.(type) {
 			case *find.NotFoundError:
-				log.Printf("[TRACE] Refreshing state. Datacenter not found: %s", err)
+				log.Printf("[DEBUG] Refreshing state. Datacenter not found: %s", err)
 				return nil, "InProgress", nil
 			default:
 				return nil, "Failed", err
 			}
 		}
-		log.Print("[TRACE] Refreshing state. Datacenter found")
+		log.Print("[DEBUG] Refreshing state. Datacenter found")
 		return dc, "Created", nil
 	}
 }
 
 func datacenterExists(d *schema.ResourceData, meta interface{}) (*object.Datacenter, error) {
 	client := meta.(*VSphereClient).vimClient
-	name := d.Get("name").(string)
+	name := d.Id()
 
 	path := name
 	if v, ok := d.GetOk("folder"); ok {
@@ -114,10 +160,71 @@ func datacenterExists(d *schema.ResourceData, meta interface{}) (*object.Datacen
 }
 
 func resourceVSphereDatacenterRead(d *schema.ResourceData, meta interface{}) error {
-	_, err := datacenterExists(d, meta)
+	dc, err := datacenterExists(d, meta)
 	if err != nil {
 		log.Printf("couldn't find the specified datacenter: %s", err)
 		d.SetId("")
+		return nil
+	}
+
+	// TODO: In v2.0, the ID should be the MOID and this can be removed.
+	if err = d.Set("moid", dc.Reference().Value); err != nil {
+		return err
+	}
+	if err = d.Set("name", dc.Name()); err != nil {
+		return err
+	}
+	// Read tags if we have the ability to do so
+	if tagsClient, _ := meta.(*VSphereClient).TagsClient(); tagsClient != nil {
+		if err := readTagsForResource(tagsClient, dc, d); err != nil {
+			return err
+		}
+	}
+
+	// Read set custom attributes
+	client := meta.(*VSphereClient).vimClient
+	if customattribute.IsSupported(client) {
+		moDc, err := datacenterCustomAttributes(dc)
+		if err != nil {
+			return err
+		}
+		customattribute.ReadFromResource(client, moDc.Entity(), d)
+	}
+
+	return nil
+}
+
+func resourceVSphereDatacenterUpdate(d *schema.ResourceData, meta interface{}) error {
+	// Load up the tags client, which will validate a proper vCenter before
+	// attempting to proceed if we have tags defined.
+	tagsClient, err := tagsClientIfDefined(d, meta)
+	if err != nil {
+		return err
+	}
+	// Verify a proper vCenter before proceeding if custom attributes are defined
+	client := meta.(*VSphereClient).vimClient
+	attrsProcessor, err := customattribute.GetDiffProcessorIfAttributesDefined(client, d)
+	if err != nil {
+		return err
+	}
+
+	dc, err := datacenterExists(d, meta)
+	if err != nil {
+		return fmt.Errorf("couldn't find the specified datacenter: %s", err)
+	}
+
+	// Apply any pending tags now
+	if tagsClient != nil {
+		if err := processTagDiff(tagsClient, d, dc); err != nil {
+			return err
+		}
+	}
+
+	// Set custom attributes
+	if attrsProcessor != nil {
+		if err := attrsProcessor.ProcessDiff(dc); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -165,4 +272,19 @@ func resourceVSphereDatacenterDelete(d *schema.ResourceData, meta interface{}) e
 	}
 
 	return nil
+}
+
+func resourceVSphereDatacenterImport(d *schema.ResourceData, meta interface{}) ([]*schema.ResourceData, error) {
+	client := meta.(*VSphereClient).vimClient
+	p := d.Id()
+	if !strings.HasPrefix(p, "/") {
+		return nil, errors.New("path must start with a trailing slash")
+	}
+
+	dc, err := datacenter.FromPath(client, p)
+	if err != nil {
+		return nil, err
+	}
+	d.SetId(dc.Name())
+	return []*schema.ResourceData{d}, nil
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/hashicorp/terraform/helper/schema"
 	"github.com/hashicorp/terraform/helper/validation"
 	"github.com/hashicorp/terraform/terraform"
+	"github.com/terraform-providers/terraform-provider-vsphere/vsphere/internal/helper/structure"
 	"github.com/vmware/govmomi/vim25/types"
 )
 
@@ -17,27 +18,27 @@ const hostPortGroupIDPrefix = "tf-HostPortGroup"
 func schemaHostPortGroupSpec() map[string]*schema.Schema {
 	s := map[string]*schema.Schema{
 		// HostPortGroupSpec
-		"name": &schema.Schema{
+		"name": {
 			Type:        schema.TypeString,
 			Required:    true,
 			Description: "The name of the port group.",
 			ForceNew:    true,
 		},
-		"vlan_id": &schema.Schema{
+		"vlan_id": {
 			Type:         schema.TypeInt,
 			Optional:     true,
 			Description:  "The VLAN ID/trunk mode for this port group. An ID of 0 denotes no tagging, an ID of 1-4094 tags with the specific ID, and an ID of 4095 enables trunk mode, allowing the guest to manage its own tagging.",
 			Default:      0,
 			ValidateFunc: validation.IntBetween(0, 4095),
 		},
-		"virtual_switch_name": &schema.Schema{
+		"virtual_switch_name": {
 			Type:        schema.TypeString,
 			Required:    true,
 			Description: "The name of the virtual switch to bind this port group to.",
 			ForceNew:    true,
 		},
 	}
-	mergeSchema(s, schemaHostNetworkPolicy())
+	structure.MergeSchema(s, schemaHostNetworkPolicy())
 	return s
 }
 
@@ -89,7 +90,7 @@ func calculatePorts(ports []types.HostPortGroupPort) *schema.Set {
 	for _, port := range ports {
 		m := make(map[string]interface{})
 		m["key"] = port.Key
-		m["mac_addresses"] = sliceStringsToInterfaces(port.Mac)
+		m["mac_addresses"] = structure.SliceStringsToInterfaces(port.Mac)
 		m["type"] = port.Type
 		s = append(s, m)
 	}
@@ -100,18 +101,18 @@ func calculatePorts(ports []types.HostPortGroupPort) *schema.Set {
 func portGroupPortSchema() *schema.Resource {
 	return &schema.Resource{
 		Schema: map[string]*schema.Schema{
-			"key": &schema.Schema{
+			"key": {
 				Type:        schema.TypeString,
 				Description: "The linkable identifier for this port entry.",
 				Computed:    true,
 			},
-			"mac_addresses": &schema.Schema{
+			"mac_addresses": {
 				Type:        schema.TypeList,
 				Description: "The MAC addresses of the network service of the virtual machine connected on this port.",
 				Computed:    true,
 				Elem:        &schema.Schema{Type: schema.TypeString},
 			},
-			"type": &schema.Schema{
+			"type": {
 				Type:        schema.TypeString,
 				Description: "Type type of the entity connected on this port. Possible values are host (VMKkernel), systemManagement (service console), virtualMachine, or unknown.",
 				Computed:    true,

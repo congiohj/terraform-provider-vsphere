@@ -4,59 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"strings"
 
 	"github.com/hashicorp/terraform/helper/schema"
 	"github.com/hashicorp/terraform/helper/validation"
+	"github.com/terraform-providers/terraform-provider-vsphere/vsphere/internal/helper/structure"
 	"github.com/vmware/vic/pkg/vsphere/tags"
 )
 
-// A list of valid types for cardinality and associable types are below. The
-// latter is more significant, even though they are not used in the resource
-// itself, to ensure all associable types are properly documented so we can
-// reference it later, in addition to providing the list for future validation
-// if we add the ability to validate lists and sets in core.
 const (
-	vSphereTagCategoryCardinalitySingle   = "SINGLE"
+	// vSphereTagCategoryCardinalitySingle defines the API type for single
+	// cardinality.
+	vSphereTagCategoryCardinalitySingle = "SINGLE"
+
+	// vSphereTagCategoryCardinalityMultiple defines the API type for multiple
+	// cardinality.
 	vSphereTagCategoryCardinalityMultiple = "MULTIPLE"
-
-	vSphereTagCategoryAssociableTypeFolder                         = "Folder"
-	vSphereTagCategoryAssociableTypeClusterComputeResource         = "ClusterComputeResource"
-	vSphereTagCategoryAssociableTypeDatacenter                     = "Datacenter"
-	vSphereTagCategoryAssociableTypeDatastore                      = "Datastore"
-	vSphereTagCategoryAssociableTypeStoragePod                     = "StoragePod"
-	vSphereTagCategoryAssociableTypeDistributedVirtualPortgroup    = "DistributedVirtualPortgroup"
-	vSphereTagCategoryAssociableTypeDistributedVirtualSwitch       = "DistributedVirtualSwitch"
-	vSphereTagCategoryAssociableTypeVmwareDistributedVirtualSwitch = "VmwareDistributedVirtualSwitch"
-	vSphereTagCategoryAssociableTypeHostSystem                     = "HostSystem"
-	vSphereTagCategoryAssociableTypeContentLibrary                 = "com.vmware.content.Library"
-	vSphereTagCategoryAssociableTypeContentLibraryItem             = "com.vmware.content.library.Item"
-	vSphereTagCategoryAssociableTypeHostNetwork                    = "HostNetwork"
-	vSphereTagCategoryAssociableTypeNetwork                        = "Network"
-	vSphereTagCategoryAssociableTypeOpaqueNetwork                  = "OpaqueNetwork"
-	vSphereTagCategoryAssociableTypeResourcePool                   = "ResourcePool"
-	vSphereTagCategoryAssociableTypeVirtualApp                     = "VirtualApp"
-	vSphereTagCategoryAssociableTypeVirtualMachine                 = "VirtualMachine"
-
-	vSphereTagCategoryAssociableTypeAll = "All"
-)
-
-// The following groups are type groups that are associated with the same type
-// selection in the vSphere Client tag category UI.
-var (
-	// vSphereTagCategoryAssociableTypesForDistributedVirtualSwitch represents
-	// types for virtual switches.
-	vSphereTagCategoryAssociableTypesForDistributedVirtualSwitch = []string{
-		vSphereTagCategoryAssociableTypeDistributedVirtualSwitch,
-		vSphereTagCategoryAssociableTypeVmwareDistributedVirtualSwitch,
-	}
-
-	// vSphereTagCategoryAssociableTypesForNetwork represents the types for
-	// networks.
-	vSphereTagCategoryAssociableTypesForNetwork = []string{
-		vSphereTagCategoryAssociableTypeHostNetwork,
-		vSphereTagCategoryAssociableTypeNetwork,
-		vSphereTagCategoryAssociableTypeOpaqueNetwork,
-	}
 )
 
 func resourceVSphereTagCategory() *schema.Resource {
@@ -111,7 +75,7 @@ func resourceVSphereTagCategoryCreate(d *schema.ResourceData, meta interface{}) 
 
 	spec := &tags.CategoryCreateSpec{
 		CreateSpec: tags.CategoryCreate{
-			AssociableTypes: sliceInterfacesToStrings(d.Get("associable_types").(*schema.Set).List()),
+			AssociableTypes: structure.SliceInterfacesToStrings(d.Get("associable_types").(*schema.Set).List()),
 			Cardinality:     d.Get("cardinality").(string),
 			Description:     d.Get("description").(string),
 			Name:            d.Get("name").(string),
@@ -142,7 +106,12 @@ func resourceVSphereTagCategoryRead(d *schema.ResourceData, meta interface{}) er
 	defer cancel()
 	category, err := client.GetCategory(ctx, id)
 	if err != nil {
-		return fmt.Errorf("could not locate category with id %q: %s", id, err)
+		if strings.Contains(err.Error(), "com.vmware.vapi.std.errors.not_found") {
+			log.Printf("[DEBUG] Tag category %s: Resource has been deleted", id)
+			d.SetId("")
+			return nil
+		}
+		return err
 	}
 	d.Set("name", category.Name)
 	d.Set("description", category.Description)
@@ -178,7 +147,7 @@ func resourceVSphereTagCategoryUpdate(d *schema.ResourceData, meta interface{}) 
 	id := d.Id()
 	spec := &tags.CategoryUpdateSpec{
 		UpdateSpec: tags.CategoryUpdate{
-			AssociableTypes: sliceInterfacesToStrings(d.Get("associable_types").(*schema.Set).List()),
+			AssociableTypes: structure.SliceInterfacesToStrings(d.Get("associable_types").(*schema.Set).List()),
 			Cardinality:     d.Get("cardinality").(string),
 			Description:     d.Get("description").(string),
 			Name:            d.Get("name").(string),

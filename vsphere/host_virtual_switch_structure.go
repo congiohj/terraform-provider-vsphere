@@ -6,6 +6,7 @@ import (
 
 	"github.com/hashicorp/terraform/helper/schema"
 	"github.com/hashicorp/terraform/helper/validation"
+	"github.com/terraform-providers/terraform-provider-vsphere/vsphere/internal/helper/structure"
 	"github.com/vmware/govmomi/vim25/types"
 )
 
@@ -28,7 +29,7 @@ var linkDiscoveryProtocolConfigProtocolAllowedValues = []string{
 func schemaHostVirtualSwitchBondBridge() map[string]*schema.Schema {
 	return map[string]*schema.Schema{
 		// HostVirtualSwitchBeaconConfig
-		"beacon_interval": &schema.Schema{
+		"beacon_interval": {
 			Type:         schema.TypeInt,
 			Optional:     true,
 			Description:  "Determines how often, in seconds, a beacon should be sent to probe for the validity of a link.",
@@ -37,14 +38,14 @@ func schemaHostVirtualSwitchBondBridge() map[string]*schema.Schema {
 		},
 
 		// LinkDiscoveryProtocolConfig
-		"link_discovery_operation": &schema.Schema{
+		"link_discovery_operation": {
 			Type:         schema.TypeString,
 			Optional:     true,
 			Description:  "Whether to advertise or listen for link discovery. Valid values are advertise, both, listen, and none.",
 			Default:      string(types.LinkDiscoveryProtocolConfigOperationTypeListen),
 			ValidateFunc: validation.StringInSlice(linkDiscoveryProtocolConfigOperationAllowedValues, false),
 		},
-		"link_discovery_protocol": &schema.Schema{
+		"link_discovery_protocol": {
 			Type:         schema.TypeString,
 			Optional:     true,
 			Description:  "The discovery protocol type. Valid values are cdp and lldp.",
@@ -53,7 +54,7 @@ func schemaHostVirtualSwitchBondBridge() map[string]*schema.Schema {
 		},
 
 		// HostVirtualSwitchBondBridge
-		"network_adapters": &schema.Schema{
+		"network_adapters": {
 			Type:        schema.TypeList,
 			Required:    true,
 			Description: "The list of network adapters to bind to this virtual switch.",
@@ -100,7 +101,7 @@ func flattenLinkDiscoveryProtocolConfig(d *schema.ResourceData, obj *types.LinkD
 // returns a HostVirtualSwitchBondBridge.
 func expandHostVirtualSwitchBondBridge(d *schema.ResourceData) *types.HostVirtualSwitchBondBridge {
 	obj := &types.HostVirtualSwitchBondBridge{
-		NicDevice: sliceInterfacesToStrings(d.Get("network_adapters").([]interface{})),
+		NicDevice: structure.SliceInterfacesToStrings(d.Get("network_adapters").([]interface{})),
 	}
 	obj.Beacon = expandHostVirtualSwitchBeaconConfig(d)
 	obj.LinkDiscoveryProtocolConfig = expandLinkDiscoveryProtocolConfig(d)
@@ -110,7 +111,7 @@ func expandHostVirtualSwitchBondBridge(d *schema.ResourceData) *types.HostVirtua
 // flattenHostVirtualSwitchBondBridge reads various fields from a
 // HostVirtualSwitchBondBridge into the passed in ResourceData.
 func flattenHostVirtualSwitchBondBridge(d *schema.ResourceData, obj *types.HostVirtualSwitchBondBridge) error {
-	if err := d.Set("network_adapters", sliceStringsToInterfaces(obj.NicDevice)); err != nil {
+	if err := d.Set("network_adapters", structure.SliceStringsToInterfaces(obj.NicDevice)); err != nil {
 		return err
 	}
 	if err := flattenHostVirtualSwitchBeaconConfig(d, obj.Beacon); err != nil {
@@ -127,14 +128,14 @@ func flattenHostVirtualSwitchBondBridge(d *schema.ResourceData, obj *types.HostV
 func schemaHostVirtualSwitchSpec() map[string]*schema.Schema {
 	s := map[string]*schema.Schema{
 		// HostVirtualSwitchSpec
-		"mtu": &schema.Schema{
+		"mtu": {
 			Type:         schema.TypeInt,
 			Optional:     true,
 			Description:  "The maximum transmission unit (MTU) of the virtual switch in bytes.",
 			Default:      1500,
 			ValidateFunc: validation.IntBetween(1, 9000),
 		},
-		"number_of_ports": &schema.Schema{
+		"number_of_ports": {
 			Type:         schema.TypeInt,
 			Optional:     true,
 			Description:  "The number of ports that this virtual switch is configured to use.",
@@ -142,8 +143,8 @@ func schemaHostVirtualSwitchSpec() map[string]*schema.Schema {
 			ValidateFunc: validation.IntBetween(0, 1024),
 		},
 	}
-	mergeSchema(s, schemaHostVirtualSwitchBondBridge())
-	mergeSchema(s, schemaHostNetworkPolicy())
+	structure.MergeSchema(s, schemaHostVirtualSwitchBondBridge())
+	structure.MergeSchema(s, schemaHostNetworkPolicy())
 	return s
 }
 
@@ -156,6 +157,11 @@ func expandHostVirtualSwitchSpec(d *schema.ResourceData) *types.HostVirtualSwitc
 		Bridge:   expandHostVirtualSwitchBondBridge(d),
 		Policy:   expandHostNetworkPolicy(d),
 	}
+	// If there are no NICs, we need to nil-out Bridge, as a
+	// HostVirtualSwitchBondBridge with no NICs is an invalid config.
+	if len(obj.Bridge.(*types.HostVirtualSwitchBondBridge).NicDevice) < 1 {
+		obj.Bridge = nil
+	}
 	return obj
 }
 
@@ -164,8 +170,10 @@ func expandHostVirtualSwitchSpec(d *schema.ResourceData) *types.HostVirtualSwitc
 func flattenHostVirtualSwitchSpec(d *schema.ResourceData, obj *types.HostVirtualSwitchSpec) error {
 	d.Set("mtu", obj.Mtu)
 	d.Set("number_of_ports", obj.NumPorts)
-	if err := flattenHostVirtualSwitchBondBridge(d, obj.Bridge.(*types.HostVirtualSwitchBondBridge)); err != nil {
-		return err
+	if obj.Bridge != nil {
+		if err := flattenHostVirtualSwitchBondBridge(d, obj.Bridge.(*types.HostVirtualSwitchBondBridge)); err != nil {
+			return err
+		}
 	}
 	if err := flattenHostNetworkPolicy(d, obj.Policy); err != nil {
 		return err

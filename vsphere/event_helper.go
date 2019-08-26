@@ -14,12 +14,9 @@ import (
 
 // A list of known event IDs that we use for querying events.
 const (
+	eventTypeVmPoweredOffEvent      = "VmPoweredOffEvent"
 	eventTypeCustomizationSucceeded = "CustomizationSucceeded"
 )
-
-// virtualMachineCustomizationWaiterTimeout is the default time that
-// virtualMachineCustomizationWaiter waits for a success or failure event.
-const virtualMachineCustomizationWaiterTimeout = time.Minute * 10
 
 // virtualMachineCustomizationWaiter is an object that waits for customization
 // of a VirtualMachine to complete, by watching for success or failure events.
@@ -53,12 +50,15 @@ func (w *virtualMachineCustomizationWaiter) Err() error {
 //
 // This should be called **before** the start of the customization task to be
 // 100% certain that completion events are not missed.
-func newVirtualMachineCustomizationWaiter(client *govmomi.Client, vm *object.VirtualMachine) *virtualMachineCustomizationWaiter {
+//
+// The timeout value is in minutes - a value of less than 1 disables the waiter
+// and returns immediately without error.
+func newVirtualMachineCustomizationWaiter(client *govmomi.Client, vm *object.VirtualMachine, timeout int) *virtualMachineCustomizationWaiter {
 	w := &virtualMachineCustomizationWaiter{
 		done: make(chan struct{}),
 	}
 	go func() {
-		w.err = w.wait(client, vm)
+		w.err = w.wait(client, vm, timeout)
 		close(w.done)
 	}()
 	return w
@@ -69,16 +69,22 @@ func newVirtualMachineCustomizationWaiter(client *govmomi.Client, vm *object.Vir
 // CustomizationSucceeded and CustomizationFailed events. If the customization
 // failed due to some sort of error, the full formatted message is returned as
 // an error.
-func (w *virtualMachineCustomizationWaiter) wait(client *govmomi.Client, vm *object.VirtualMachine) error {
+func (w *virtualMachineCustomizationWaiter) wait(client *govmomi.Client, vm *object.VirtualMachine, timeout int) error {
+	// A timeout of less than 1 minute (zero or negative value) skips the waiter,
+	// so we return immediately.
+	if timeout < 1 {
+		return nil
+	}
+
 	// Our listener loop callback.
-	success := make(chan struct{})
+	cbErr := make(chan error, 1)
 	cb := func(obj types.ManagedObjectReference, page []types.BaseEvent) error {
 		for _, be := range page {
 			switch e := be.(type) {
-			case *types.CustomizationFailed:
-				return errors.New(e.GetEvent().FullFormattedMessage)
+			case types.BaseCustomizationFailed:
+				cbErr <- errors.New(e.GetCustomizationFailed().GetEvent().FullFormattedMessage)
 			case *types.CustomizationSucceeded:
-				close(success)
+				close(cbErr)
 			}
 		}
 		return nil
@@ -95,22 +101,22 @@ func (w *virtualMachineCustomizationWaiter) wait(client *govmomi.Client, vm *obj
 		mgrErr <- mgr.Events(pctx, []types.ManagedObjectReference{vm.Reference()}, 10, true, false, cb)
 	}()
 
-	// This is our waiter. We want to wait on all of these conditions. We also
-	// use a different context so that we can give a better error message on
-	// timeout without interfering with the subscriber's context.
-	ctx, cancel := context.WithTimeout(context.Background(), virtualMachineCustomizationWaiterTimeout)
+	// Wait for any error condition (including nil from the closure of the
+	// callback error channel on success). We also use a different context so
+	// that we can give a better error message on timeout without interfering
+	// with the subscriber's context.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Minute)
 	defer cancel()
+	var err error
 	select {
-	case err := <-mgrErr:
-		return err
 	case <-ctx.Done():
 		if ctx.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("timeout waiting for customization to complete")
+			err = fmt.Errorf("timeout waiting for customization to complete")
 		}
-	case <-success:
-		// Pass case to break to success
+	case err = <-mgrErr:
+	case err = <-cbErr:
 	}
-	return nil
+	return err
 }
 
 // selectEventsForReference allows you to query events for a specific

@@ -6,24 +6,25 @@ import (
 	"context"
 
 	"github.com/hashicorp/terraform/helper/schema"
+	"github.com/terraform-providers/terraform-provider-vsphere/vsphere/internal/helper/structure"
 )
 
 func resourceVSphereHostVirtualSwitch() *schema.Resource {
 	s := map[string]*schema.Schema{
-		"name": &schema.Schema{
+		"name": {
 			Type:        schema.TypeString,
 			Description: "The name of the virtual switch.",
 			Required:    true,
 			ForceNew:    true,
 		},
-		"host_system_id": &schema.Schema{
+		"host_system_id": {
 			Type:        schema.TypeString,
 			Description: "The managed object ID of the host to set the virtual switch up on.",
 			Required:    true,
 			ForceNew:    true,
 		},
 	}
-	mergeSchema(s, schemaHostVirtualSwitchSpec())
+	structure.MergeSchema(s, schemaHostVirtualSwitchSpec())
 
 	// Transform any necessary fields in the schema that need to be updated
 	// specifically for this resource.
@@ -42,10 +43,14 @@ func resourceVSphereHostVirtualSwitch() *schema.Resource {
 	s["shaping_enabled"].Default = false
 
 	return &schema.Resource{
-		Create: resourceVSphereHostVirtualSwitchCreate,
-		Read:   resourceVSphereHostVirtualSwitchRead,
-		Update: resourceVSphereHostVirtualSwitchUpdate,
-		Delete: resourceVSphereHostVirtualSwitchDelete,
+		Create:        resourceVSphereHostVirtualSwitchCreate,
+		Read:          resourceVSphereHostVirtualSwitchRead,
+		Update:        resourceVSphereHostVirtualSwitchUpdate,
+		Delete:        resourceVSphereHostVirtualSwitchDelete,
+		CustomizeDiff: resourceVSphereHostVirtualSwitchCustomizeDiff,
+		Importer: &schema.ResourceImporter{
+			State: resourceVSphereHostVirtualSwitchImport,
+		},
 		Schema: s,
 	}
 }
@@ -130,6 +135,59 @@ func resourceVSphereHostVirtualSwitchDelete(d *schema.ResourceData, meta interfa
 	defer cancel()
 	if err := ns.RemoveVirtualSwitch(ctx, name); err != nil {
 		return fmt.Errorf("error deleting host vSwitch: %s", err)
+	}
+
+	return nil
+}
+
+func resourceVSphereHostVirtualSwitchImport(d *schema.ResourceData, meta interface{}) ([]*schema.ResourceData, error) {
+	hostID, switchName, err := splitHostVirtualSwitchID(d.Id())
+	if err != nil {
+		return []*schema.ResourceData{}, err
+	}
+
+	err = d.Set("host_system_id", hostID)
+	if err != nil {
+		return []*schema.ResourceData{}, err
+	}
+
+	err = d.Set("name", switchName)
+	if err != nil {
+		return []*schema.ResourceData{}, err
+	}
+
+	return []*schema.ResourceData{d}, nil
+}
+
+func resourceVSphereHostVirtualSwitchCustomizeDiff(d *schema.ResourceDiff, meta interface{}) error {
+	// We want to quickly validate that each NIC that is in either active_nics or
+	// standby_nics will be a part of the bridge.
+	bridgeNics := d.Get("network_adapters").([]interface{})
+	activeNics := d.Get("active_nics").([]interface{})
+	standbyNics := d.Get("standby_nics").([]interface{})
+
+	for _, v := range activeNics {
+		var found bool
+		for _, w := range bridgeNics {
+			if v == w {
+				found = true
+			}
+		}
+		if !found {
+			return fmt.Errorf("active NIC entry %q not present in network_adapters list", v)
+		}
+	}
+
+	for _, v := range standbyNics {
+		var found bool
+		for _, w := range bridgeNics {
+			if v == w {
+				found = true
+			}
+		}
+		if !found {
+			return fmt.Errorf("standby NIC entry %q not present in network_adapters list", v)
+		}
 	}
 
 	return nil
